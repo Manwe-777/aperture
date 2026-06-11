@@ -30,6 +30,14 @@ export type SeerrAuthData =
       password: string;
     };
 
+export interface OpenSubtitlesConfig {
+  apiKey: string;
+  username: string;
+  password: string;
+  // Comma separated ISO 639 language codes preferred for searches, e.g. "en,es"
+  languages?: string;
+}
+
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365; // 1 year — auth tokens live until revoked
 // Login preferences contain no secrets. Keep them much longer so prefill data survives auth-cookie expiry.
 const LOGIN_PREFS_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10; // 10 years
@@ -302,4 +310,50 @@ export async function getSeerrData(): Promise<SeerrAuthData | null> {
 
 export async function removeSeerrData() {
   (await cookies()).delete(SEERR_DATA_KEY);
+}
+
+// --- StoreOpenSubtitlesData actions ---
+// Unlike the other config cookies above, this one holds an API key + password
+// for a third-party service, so it is stored httpOnly: the value is only ever
+// read server-side (the /api/subtitles/* route handlers) and never exposed to
+// client-side JavaScript via document.cookie.
+const OPENSUBTITLES_DATA_KEY = "opensubtitles-config";
+
+export async function setOpenSubtitlesConfig(value: OpenSubtitlesConfig) {
+  (await cookies()).set(OPENSUBTITLES_DATA_KEY, JSON.stringify(value), {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+  });
+}
+
+export async function getOpenSubtitlesConfig(): Promise<OpenSubtitlesConfig | null> {
+  const cookieStore = await cookies();
+  const val = cookieStore.get(OPENSUBTITLES_DATA_KEY);
+  if (!val || !val.value) return null;
+
+  try {
+    return JSON.parse(val.value) as OpenSubtitlesConfig;
+  } catch {
+    return null;
+  }
+}
+
+export async function removeOpenSubtitlesConfig() {
+  (await cookies()).delete(OPENSUBTITLES_DATA_KEY);
+}
+
+// Returns just enough for the settings UI to render its "configured" state
+// without pulling the secret values into client memory.
+export async function getOpenSubtitlesStatus(): Promise<{
+  configured: boolean;
+  username: string;
+  languages: string;
+}> {
+  const config = await getOpenSubtitlesConfig();
+  return {
+    configured: !!(config?.apiKey && config?.username && config?.password),
+    username: config?.username ?? "",
+    languages: config?.languages ?? "en",
+  };
 }
