@@ -7,7 +7,6 @@ import { createJellyfinInstance } from "../lib/utils";
 import { getDeviceId } from "../lib/device-id";
 import { StoreServerURL } from "./store/store-server-url";
 import { StoreAuthData } from "./store/store-auth-data";
-import { StoreSeerrData } from "./store/store-seerr-data";
 import { isAuthError } from "./media";
 
 // Type aliases for easier use
@@ -476,7 +475,10 @@ export async function logout(
     }
   } catch {}
 
-  await Promise.all([StoreAuthData.remove(), StoreSeerrData.remove()]);
+  // Only the session is cleared. The Seerr/OpenSubtitles config is server-side
+  // instance config now, not session state — wiping it on logout is what made
+  // it disappear so often. Disconnect explicitly from Settings to clear it.
+  await StoreAuthData.remove();
 
   navigate("/login");
 }

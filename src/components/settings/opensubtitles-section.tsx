@@ -27,6 +27,7 @@ import { Input } from "@/src/components/ui/input";
 import { Button } from "@/src/components/ui/button";
 import { useCallback, useEffect, useState } from "react";
 import { StoreOpenSubtitlesData } from "@/src/actions/store/store-opensubtitles-data";
+import SettingsStorageNotice from "@/src/components/settings/settings-storage-notice";
 import { toast } from "sonner";
 
 export default function OpenSubtitlesSection() {
@@ -151,6 +152,7 @@ export default function OpenSubtitlesSection() {
         </CollapsibleTrigger>
         <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0">
           <CardContent className="space-y-6">
+            <SettingsStorageNotice />
             {loading ? (
               <div className="flex items-center justify-center py-4 text-muted-foreground">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

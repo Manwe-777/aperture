@@ -5,6 +5,10 @@ services:
       - "3000:3000"
     environment:
       - DEFAULT_SERVER_URL=${DEFAULT_SERVER_URL}
+      # Where server-side settings (Seerr / OpenSubtitles config) are stored.
+      - APERTURE_DATA_DIR=/data
+    volumes:
+      - aperture-data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
@@ -12,3 +16,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+volumes:
+  aperture-data:

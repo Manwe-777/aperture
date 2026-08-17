@@ -33,7 +33,7 @@ import {
   TabsTrigger,
 } from "@/src/components/ui/tabs";
 import { StoreSeerrData } from "@/src/actions/store/store-seerr-data";
-import { StoreLoginPreferences } from "@/src/actions/store/store-login-preferences";
+import SettingsStorageNotice from "@/src/components/settings/settings-storage-notice";
 import { type SeerrAuthType } from "@/src/actions/store/server-actions";
 import { toast } from "sonner";
 import { testSeerrConnection } from "@/src/actions";
@@ -56,6 +56,15 @@ export default function SeerrSection() {
       const data = await StoreSeerrData.get();
       if (data) {
         setServerUrl(data.serverUrl);
+        // Config comes from the server, so prefill the whole form — on a new
+        // device the fields would otherwise look empty despite being connected.
+        setAuthType(data.authType);
+        if (data.authType === "api-key") {
+          setApiKey(data.apiKey ?? "");
+        } else {
+          setUsername(data.username ?? "");
+          setPassword(data.password ?? "");
+        }
 
         if (
           data.serverUrl &&
@@ -76,27 +85,23 @@ export default function SeerrSection() {
     loadSettings();
   }, [loadSettings]);
 
-  const getRememberMePreference = useCallback(async () => {
-    const prefs = await StoreLoginPreferences.get();
-    return prefs?.rememberMe === true;
-  }, []);
-
   const handleSave = async () => {
     try {
-      const rememberMe = await getRememberMePreference();
+      // Saved on the Aperture server, so it no longer depends on the browser
+      // session or the "keep me signed in" preference.
       if (authType === "api-key") {
         await StoreSeerrData.set({
           authType: "api-key",
           serverUrl,
           apiKey,
-        }, { persistent: rememberMe });
+        });
       } else {
         await StoreSeerrData.set({
           authType,
           serverUrl,
           username,
           password,
-        }, { persistent: rememberMe });
+        });
       }
       toast.success("Seerr settings saved successfully");
     } catch (error) {
@@ -196,6 +201,7 @@ export default function SeerrSection() {
         </CollapsibleTrigger>
         <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-up data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-down">
           <CardContent className="space-y-6">
+            <SettingsStorageNotice />
             {loading ? (
               <div className="flex items-center justify-center py-4 text-muted-foreground">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

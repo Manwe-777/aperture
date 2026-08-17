@@ -33,6 +33,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Server-side settings (Seerr / OpenSubtitles config) are written here.
+# Mount a volume on /data so they survive container rebuilds.
+ENV APERTURE_DATA_DIR=/data
+RUN mkdir -p /data
+VOLUME ["/data"]
+
 # Copy package.json for reference
 COPY package.json ./
 

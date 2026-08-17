@@ -51,6 +51,9 @@ public/_next-video
 
 /old-codebase
 
+# server-side settings store (APERTURE_DATA_DIR), holds credentials
+/data
+
 # Logs
 *.log
 npm-debug.log*

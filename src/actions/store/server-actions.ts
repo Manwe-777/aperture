@@ -2,6 +2,12 @@
 
 import { cookies } from "next/headers";
 import { AuthenticationResult } from "@jellyfin/sdk/lib/generated-client/models";
+import {
+  getSettingsFilePath,
+  isSettingsStoreWritable,
+  patchSettings,
+  readSettings,
+} from "@/src/lib/settings-store";
 
 // --- Types ---
 export interface LoginPreferences {
@@ -74,6 +80,29 @@ function getSessionCookieOptions() {
     secure: process.env.NODE_ENV === "production",
     path: "/",
   };
+}
+
+// --- Legacy cookie migration ---
+// Integration config used to be cookie-backed. These helpers read such a cookie
+// once so existing setups carry over, then drop it. Cookies can only be
+// mutated from a Server Action or Route Handler, so a delete attempted during a
+// plain render is ignored rather than allowed to blow up the request.
+async function readLegacyCookie<T>(key: string): Promise<T | null> {
+  const val = (await cookies()).get(key);
+  if (!val?.value) return null;
+  try {
+    return JSON.parse(val.value) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function clearLegacyCookie(key: string): Promise<void> {
+  try {
+    (await cookies()).delete(key);
+  } catch {
+    // Not in a mutable cookie context — it will be cleared on a later write.
+  }
 }
 
 // --- StoreServerURL actions ---
@@ -282,65 +311,63 @@ export async function executeClearAuthDataAction(
 }
 
 // --- StoreSeerrData actions ---
+// Stored server-side (see src/lib/settings-store.ts), not in a cookie: the
+// Seerr connection is a property of this Aperture instance, so it must survive
+// logout, cookie expiry and switching devices. Legacy cookie values are
+// migrated on first read.
 const SEERR_DATA_KEY = "seerr-config";
 
-export async function setSeerrData(
-  value: SeerrAuthData,
-  options?: { persistent?: boolean },
-) {
-  const cookieOptions = options?.persistent
-    ? getPersistentCookieOptions()
-    : getSessionCookieOptions();
-
-  (await cookies()).set(SEERR_DATA_KEY, JSON.stringify(value), cookieOptions);
+export async function setSeerrData(value: SeerrAuthData) {
+  await patchSettings({ seerr: value });
+  await clearLegacyCookie(SEERR_DATA_KEY);
 }
 
 export async function getSeerrData(): Promise<SeerrAuthData | null> {
-  const cookieStore = await cookies();
-  const val = cookieStore.get(SEERR_DATA_KEY);
-  if (!val || !val.value) return null;
+  const settings = await readSettings();
+  if (settings.seerr) return settings.seerr;
 
-  try {
-    const parsed = JSON.parse(val.value);
-    return parsed as SeerrAuthData;
-  } catch {
-    return null;
-  }
+  const legacy = await readLegacyCookie<SeerrAuthData>(SEERR_DATA_KEY);
+  if (!legacy) return null;
+
+  await patchSettings({ seerr: legacy });
+  await clearLegacyCookie(SEERR_DATA_KEY);
+  return legacy;
 }
 
 export async function removeSeerrData() {
-  (await cookies()).delete(SEERR_DATA_KEY);
+  await patchSettings({ seerr: null });
+  await clearLegacyCookie(SEERR_DATA_KEY);
 }
 
 // --- StoreOpenSubtitlesData actions ---
-// Unlike the other config cookies above, this one holds an API key + password
-// for a third-party service, so it is stored httpOnly: the value is only ever
-// read server-side (the /api/subtitles/* route handlers) and never exposed to
-// client-side JavaScript via document.cookie.
+// Also server-side. These are third-party account credentials (API key +
+// password), and they are never handed to client-side JavaScript: the settings
+// UI only ever receives the redacted status below, and the actual values are
+// read by the /api/subtitles/* route handlers.
 const OPENSUBTITLES_DATA_KEY = "opensubtitles-config";
 
 export async function setOpenSubtitlesConfig(value: OpenSubtitlesConfig) {
-  (await cookies()).set(OPENSUBTITLES_DATA_KEY, JSON.stringify(value), {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-  });
+  await patchSettings({ opensubtitles: value });
+  await clearLegacyCookie(OPENSUBTITLES_DATA_KEY);
 }
 
 export async function getOpenSubtitlesConfig(): Promise<OpenSubtitlesConfig | null> {
-  const cookieStore = await cookies();
-  const val = cookieStore.get(OPENSUBTITLES_DATA_KEY);
-  if (!val || !val.value) return null;
+  const settings = await readSettings();
+  if (settings.opensubtitles) return settings.opensubtitles;
 
-  try {
-    return JSON.parse(val.value) as OpenSubtitlesConfig;
-  } catch {
-    return null;
-  }
+  const legacy = await readLegacyCookie<OpenSubtitlesConfig>(
+    OPENSUBTITLES_DATA_KEY,
+  );
+  if (!legacy) return null;
+
+  await patchSettings({ opensubtitles: legacy });
+  await clearLegacyCookie(OPENSUBTITLES_DATA_KEY);
+  return legacy;
 }
 
 export async function removeOpenSubtitlesConfig() {
-  (await cookies()).delete(OPENSUBTITLES_DATA_KEY);
+  await patchSettings({ opensubtitles: null });
+  await clearLegacyCookie(OPENSUBTITLES_DATA_KEY);
 }
 
 // Returns just enough for the settings UI to render its "configured" state
@@ -355,5 +382,17 @@ export async function getOpenSubtitlesStatus(): Promise<{
     configured: !!(config?.apiKey && config?.username && config?.password),
     username: config?.username ?? "",
     languages: config?.languages ?? "en",
+  };
+}
+
+// Where the settings actually live, so the UI can say so (and warn when the
+// data directory is not writable, i.e. changes would be lost on restart).
+export async function getSettingsStorageInfo(): Promise<{
+  path: string;
+  writable: boolean;
+}> {
+  return {
+    path: getSettingsFilePath(),
+    writable: await isSettingsStoreWritable(),
   };
 }
