@@ -40,14 +40,24 @@ RUN mkdir -p /data
 VOLUME ["/data"]
 
 # Copy package.json for reference
-COPY package.json ./
+COPY --chown=bun:bun package.json ./
 
 # Copy node_modules
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps --chown=bun:bun /app/node_modules ./node_modules
 
 # Copy built app from builder
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+COPY --from=builder --chown=bun:bun /app/.next ./.next
+COPY --from=builder --chown=bun:bun /app/public ./public
+
+# Run unprivileged as the image's built-in bun user (uid/gid 1000). The
+# settings file it writes to /data then belongs to the host user rather than
+# root, so host-side backups of the data volume can actually read it.
+# Ownership of the copied trees is set by the --chown flags above; only the two
+# directories themselves are left, so no recursive chown (which would duplicate
+# all of node_modules into another layer) is needed. `next start` writes its
+# runtime cache under .next, which the COPY --chown already covers.
+RUN chown bun:bun /app /data
+USER bun
 
 # Expose port 3000
 EXPOSE 3000
