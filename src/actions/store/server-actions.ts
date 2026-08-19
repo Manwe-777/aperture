@@ -53,11 +53,18 @@ const LOGIN_PREFS_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10; // 10 years
 // you left off"), the session is treated as expired after this much inactivity.
 const SESSION_MAX_IDLE_SECONDS = 60 * 60 * 8; // 8 hours
 
+// Browsers discard `Secure` cookies on insecure origins, so gating this on
+// NODE_ENV breaks every HTTP-only deployment: login succeeds, the auth cookie
+// is dropped, and the app bounces straight back to /login. This instance sits
+// behind NPM on plain HTTP, so opt in explicitly instead — set
+// APERTURE_SECURE_COOKIES=true once there is TLS in front.
+const USE_SECURE_COOKIES = process.env.APERTURE_SECURE_COOKIES === "true";
+
 function getPersistentCookieOptions() {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    secure: USE_SECURE_COOKIES,
     path: "/",
     maxAge: COOKIE_MAX_AGE_SECONDS,
   };
@@ -67,7 +74,7 @@ function getLoginPrefsCookieOptions() {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    secure: USE_SECURE_COOKIES,
     path: "/",
     maxAge: LOGIN_PREFS_MAX_AGE_SECONDS,
   };
@@ -77,7 +84,7 @@ function getSessionCookieOptions() {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    secure: USE_SECURE_COOKIES,
     path: "/",
   };
 }
