@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from "react";
-
-interface SubtitleLine {
-  startTime: number; // in seconds
-  endTime: number;
-  text: string;
-}
+import {
+  findActiveCue,
+  loadCues,
+  type SubtitleCue as SubtitleLine,
+} from "../utils/subtitleCues";
 
 interface SubtitleTrack {
   index: number;
@@ -20,6 +19,8 @@ interface SubtitleDisplayProps {
   textTracks?: SubtitleTrack[];
   isVisible?: boolean;
   isControlsVisible?: boolean;
+  // Seconds to shift cues by; positive shows them later.
+  subtitleOffset?: number;
 }
 
 /**
@@ -138,61 +139,13 @@ function parseSubtitleHTML(text: string): React.ReactNode {
   return elements;
 }
 
-/**
- * Parse VTT format subtitle content
- */
-function parseVTT(content: string): SubtitleLine[] {
-  const lines = content.split("\n");
-  const subtitles: SubtitleLine[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-
-    // Look for timestamp line (format: HH:MM:SS.mmm --> HH:MM:SS.mmm)
-    if (line.includes("-->")) {
-      const [startStr, endStr] = line.split("-->").map((s) => s.trim());
-      const startTime = timeToSeconds(startStr);
-      const endTime = timeToSeconds(endStr);
-
-      // Collect all text lines until next empty line
-      let textLines: string[] = [];
-      i++;
-      while (i < lines.length && lines[i].trim() !== "") {
-        textLines.push(lines[i]);
-        i++;
-      }
-
-      if (textLines.length > 0) {
-        subtitles.push({
-          startTime,
-          endTime,
-          text: textLines.join("\n"),
-        });
-      }
-    }
-  }
-
-  return subtitles;
-}
-
-/**
- * Convert timestamp string (HH:MM:SS.mmm) to seconds
- */
-function timeToSeconds(timeStr: string): number {
-  const parts = timeStr.split(":");
-  const hours = parseInt(parts[0], 10) || 0;
-  const minutes = parseInt(parts[1], 10) || 0;
-  const seconds = parseFloat(parts[2]) || 0;
-
-  return hours * 3600 + minutes * 60 + seconds;
-}
-
 export const SubtitleDisplay: React.FC<SubtitleDisplayProps> = ({
   currentTime,
   subtitleStreamIndex,
   textTracks = [],
   isVisible = true,
   isControlsVisible = true,
+  subtitleOffset = 0,
 }) => {
   const [allSubtitles, setAllSubtitles] = useState<Map<number, SubtitleLine[]>>(
     new Map(),
@@ -255,18 +208,7 @@ export const SubtitleDisplay: React.FC<SubtitleDisplayProps> = ({
 
       for (const track of textTracks) {
         try {
-          const response = await fetch(track.src);
-          if (!response.ok) {
-            console.error(
-              `Failed to fetch subtitles for ${track.label}:`,
-              response.statusText,
-            );
-            continue;
-          }
-
-          const content = await response.text();
-          const parsed = parseVTT(content);
-          subtitleMap.set(track.index, parsed);
+          subtitleMap.set(track.index, await loadCues(track.src));
         } catch (error) {
           console.error(`Error loading subtitles for ${track.label}:`, error);
         }
@@ -291,12 +233,30 @@ export const SubtitleDisplay: React.FC<SubtitleDisplayProps> = ({
       return;
     }
 
-    const active = subtitles.find(
-      (sub) => currentTime >= sub.startTime && currentTime < sub.endTime,
+    // timeupdate only fires ~4x a second, too coarse to judge sync by. Read
+    // the video's clock every frame instead; re-render only when the cue changes.
+    const video = document.querySelector<HTMLVideoElement>(
+      "[data-player-container] video",
     );
+    let shown = -2;
+    const update = (time: number) => {
+      const index = findActiveCue(subtitles, time - subtitleOffset);
+      if (index !== shown) {
+        shown = index;
+        setCurrentSubtitle(index >= 0 ? subtitles[index] : null);
+      }
+    };
 
-    setCurrentSubtitle(active || null);
-  }, [currentTime, subtitleStreamIndex, allSubtitles]);
+    if (!video) {
+      update(currentTime);
+      return;
+    }
+    let frame = requestAnimationFrame(function tick() {
+      update(video.currentTime);
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [currentTime, subtitleStreamIndex, allSubtitles, subtitleOffset]);
 
   if (!isVisible || !currentSubtitle) {
     return null;

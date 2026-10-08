@@ -8,7 +8,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "../../../components/ui/dropdown-menu";
-import { Captions, Type } from "lucide-react";
+import { AudioWaveform, Captions, Type } from "lucide-react";
+import { useSetAtom } from "jotai";
+import { subtitleSyncOpenAtom } from "../../../lib/atoms";
 import { PlaybackContextValue } from "../../hooks/usePlaybackManager";
 import {
   getInstalledSubtitles,
@@ -33,6 +35,8 @@ export const SubtitleTracksMenu: React.FC<SubtitleTracksMenuProps> = ({
   const { playbackState } = manager;
   const { currentItem, currentMediaSource } = playbackState;
   const [subtitleTracks, setSubtitleTracks] = useState<any[]>([]);
+  const openSync = useSetAtom(subtitleSyncOpenAtom);
+  const subtitleOn = (playbackState.subtitleStreamIndex ?? -1) >= 0;
   // Same streams with the details recorded when they were added, by index.
   const [installedByIndex, setInstalledByIndex] = useState<
     Map<number, InstalledSubtitle>
@@ -162,6 +166,25 @@ export const SubtitleTracksMenu: React.FC<SubtitleTracksMenuProps> = ({
               }
             />
           </div>
+
+          <button
+            type="button"
+            disabled={!subtitleOn}
+            onClick={() => {
+              openSync(true);
+              onOpenChange(false);
+            }}
+            className="flex w-full items-center gap-2 px-5 py-2 text-left text-white/90 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <AudioWaveform className="ml-3 h-4 w-4" />
+            Sync subtitles…
+            {playbackState.subtitleOffset ? (
+              <span className="ml-auto text-[11px] tabular-nums text-white/50">
+                {playbackState.subtitleOffset > 0 ? "+" : ""}
+                {playbackState.subtitleOffset.toFixed(3)}s
+              </span>
+            ) : null}
+          </button>
 
           <DropdownMenuSeparator className="bg-white/10" />
 

@@ -124,6 +124,8 @@ export {
   uploadSubtitleToJellyfin,
   deleteJellyfinSubtitle,
   isSubtitleFileAdded,
+  getSubtitleOffset,
+  setSubtitleOffset,
 } from "./subtitles-search";
 export type {
   InstalledSubtitle,

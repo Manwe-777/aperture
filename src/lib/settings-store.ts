@@ -30,6 +30,9 @@ export interface ApertureSettings {
   // so this is the only record of which release a subtitle came from.
   subtitles?: Record<string, SubtitleDetails> | null;
   pendingSubtitles?: PendingSubtitle[] | null;
+  // Seconds to shift a subtitle track's cues by in the player. Keyed like
+  // `subtitles` for sidecars; embedded tracks use "<itemId>:<mediaSourceId>:<index>".
+  subtitleOffsets?: Record<string, number> | null;
 }
 
 const EMPTY: ApertureSettings = {};

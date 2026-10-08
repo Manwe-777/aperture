@@ -144,6 +144,44 @@ async function resolvePendingDetails(
   return next.subtitles ?? {};
 }
 
+async function subtitleOffsetKey(
+  itemId: string,
+  mediaSourceId: string,
+  index: number,
+): Promise<string> {
+  const item = await fetchItem(itemId);
+  const path = item.MediaSources?.find((ms) => ms.Id === mediaSourceId)
+    ?.MediaStreams?.find((s) => s.Type === "Subtitle" && s.Index === index)?.Path;
+  return path || `${itemId}:${mediaSourceId}:${index}`;
+}
+
+// Saved sync offset for a subtitle track, in seconds (positive = later).
+export async function getSubtitleOffset(
+  itemId: string,
+  mediaSourceId: string,
+  index: number,
+): Promise<number> {
+  const key = await subtitleOffsetKey(itemId, mediaSourceId, index);
+  return (await readSettings()).subtitleOffsets?.[key] ?? 0;
+}
+
+export async function setSubtitleOffset(
+  itemId: string,
+  mediaSourceId: string,
+  index: number,
+  seconds: number,
+): Promise<void> {
+  if (!Number.isFinite(seconds)) throw new Error("Invalid offset");
+  const key = await subtitleOffsetKey(itemId, mediaSourceId, index);
+  const rounded = Math.round(seconds * 1000) / 1000;
+  await updateSettings((s) => {
+    const subtitleOffsets = { ...(s.subtitleOffsets ?? {}) };
+    if (rounded === 0) delete subtitleOffsets[key];
+    else subtitleOffsets[key] = rounded;
+    return { ...s, subtitleOffsets };
+  });
+}
+
 // True when this OpenSubtitles file is already on the item, or was added and
 // Jellyfin hasn't indexed it yet. Downloads count against a daily quota.
 export async function isSubtitleFileAdded(
@@ -303,11 +341,14 @@ export async function deleteJellyfinSubtitle(
     };
   }
 
-  if (path && (await readSettings()).subtitles?.[path]) {
+  const stored = await readSettings();
+  if (path && (stored.subtitles?.[path] || stored.subtitleOffsets?.[path])) {
     await updateSettings((s) => {
       const subtitles = { ...(s.subtitles ?? {}) };
+      const subtitleOffsets = { ...(s.subtitleOffsets ?? {}) };
       delete subtitles[path];
-      return { ...s, subtitles };
+      delete subtitleOffsets[path];
+      return { ...s, subtitles, subtitleOffsets };
     });
   }
 

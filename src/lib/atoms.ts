@@ -12,6 +12,9 @@ export const globalAuthErrorAtom = atom<any | null>(null);
 // Fullscreen state
 export const isFullscreenAtom = atom(false);
 
+// Subtitle sync panel in the video player
+export const subtitleSyncOpenAtom = atom(false);
+
 // Aurora background colors with transition support
 export const auroraColorsAtom = atom<string[]>([
   "#AA5CC3",

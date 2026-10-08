@@ -10,6 +10,10 @@ import {
 import { Player } from "../types";
 import { VideoOSD } from "./VideoOSD";
 import { SubtitleDisplay } from "./SubtitleDisplay";
+import { SubtitleSyncPanel } from "./SubtitleSyncPanel";
+import { useAtom } from "jotai";
+import { subtitleSyncOpenAtom } from "../../lib/atoms";
+import { getSubtitleOffset } from "../../actions";
 
 interface JellyfinPlayerProps {
   className?: string;
@@ -33,6 +37,28 @@ export const JellyfinPlayer: React.FC<JellyfinPlayerProps> = ({
   const [cursorVisible, setCursorVisible] = useState(true);
   const [playerHovered, setPlayerHovered] = useState(false);
   const cursorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [syncOpen, setSyncOpen] = useAtom(subtitleSyncOpenAtom);
+
+  // Each subtitle track remembers its own sync offset.
+  const itemId = playbackState.currentItem?.Id;
+  const mediaSourceId = playbackState.currentMediaSource?.Id;
+  const subtitleIndex = playbackState.subtitleStreamIndex ?? -1;
+  const { reportState } = manager;
+  useEffect(() => {
+    reportState({ subtitleOffset: 0 });
+    if (!itemId || !mediaSourceId || subtitleIndex < 0) return;
+    let cancelled = false;
+    getSubtitleOffset(itemId, mediaSourceId, subtitleIndex)
+      .then((offset) => !cancelled && reportState({ subtitleOffset: offset }))
+      .catch((e) => console.error("Failed to load subtitle offset", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [itemId, mediaSourceId, subtitleIndex, reportState]);
+
+  useEffect(() => {
+    if (!itemId) setSyncOpen(false);
+  }, [itemId, setSyncOpen]);
 
   useEffect(() => {
     const handleMouseMove = () => {
@@ -198,7 +224,14 @@ export const JellyfinPlayer: React.FC<JellyfinPlayerProps> = ({
             subtitleStreamIndex={playbackState.subtitleStreamIndex}
             isVisible={(playbackState.subtitleStreamIndex ?? -1) >= 0}
             isControlsVisible={cursorVisible}
+            subtitleOffset={playbackState.subtitleOffset || 0}
           />
+          {syncOpen && !playbackState.isMiniPlayer ? (
+            <SubtitleSyncPanel
+              manager={manager}
+              onClose={() => setSyncOpen(false)}
+            />
+          ) : null}
         </Fragment>
       ) : (
         <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/80 backdrop-blur-md opacity-0 group-hover:opacity-100 transition-opacity duration-300">
