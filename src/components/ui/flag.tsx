@@ -1,4 +1,5 @@
 import React from "react";
+import { canonicalLanguage } from "@/src/lib/language";
 
 interface FlagProps {
   language: string;
@@ -73,7 +74,7 @@ export function Flag({ language, className = "", size = 16 }: FlagProps) {
     );
   }
 
-  const normalizedLanguage = language.toLowerCase();
+  const normalizedLanguage = canonicalLanguage(language).toLowerCase();
   const countryCode = languageToCountryMap[normalizedLanguage] || normalizedLanguage.slice(0, 2);
 
   return (

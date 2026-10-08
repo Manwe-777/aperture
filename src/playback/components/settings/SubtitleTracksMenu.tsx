@@ -10,7 +10,13 @@ import {
 } from "../../../components/ui/dropdown-menu";
 import { Captions, Type } from "lucide-react";
 import { PlaybackContextValue } from "../../hooks/usePlaybackManager";
-import { getSubtitleTracks } from "../../../actions";
+import {
+  getInstalledSubtitles,
+  getSubtitleTracks,
+  type InstalledSubtitle,
+} from "../../../actions";
+import { Flag } from "../../../components/ui/flag";
+import { languageName } from "../../../lib/language";
 import { SettingsMenuButton } from "./SettingsMenuButton";
 
 interface SubtitleTracksMenuProps {
@@ -27,6 +33,10 @@ export const SubtitleTracksMenu: React.FC<SubtitleTracksMenuProps> = ({
   const { playbackState } = manager;
   const { currentItem, currentMediaSource } = playbackState;
   const [subtitleTracks, setSubtitleTracks] = useState<any[]>([]);
+  // Same streams with the details recorded when they were added, by index.
+  const [installedByIndex, setInstalledByIndex] = useState<
+    Map<number, InstalledSubtitle>
+  >(new Map());
 
   const [subtitleSize, setSubtitleSize] = useState<number>(() => {
     if (typeof window !== "undefined") {
@@ -47,6 +57,15 @@ export const SubtitleTracksMenu: React.FC<SubtitleTracksMenuProps> = ({
           setSubtitleTracks(subs);
         } catch (error) {
           console.error("Failed to fetch subtitle tracks", error);
+        }
+        try {
+          const installed = await getInstalledSubtitles(
+            currentItem.Id,
+            currentMediaSource.Id,
+          );
+          setInstalledByIndex(new Map(installed.map((s) => [s.index, s])));
+        } catch (error) {
+          console.error("Failed to fetch subtitle details", error);
         }
       }
     }
@@ -85,7 +104,7 @@ export const SubtitleTracksMenu: React.FC<SubtitleTracksMenuProps> = ({
       <DropdownMenuContent
         sideOffset={8}
         side="top"
-        className="w-48 rounded-2xl overflow-hidden text-sm z-100 max-h-[60vh] overflow-y-auto"
+        className="w-72 rounded-2xl overflow-hidden text-sm z-100 max-h-[60vh] overflow-y-auto"
         style={{
           background: "rgba(30, 30, 30, 0.65)",
           backdropFilter: "blur(40px)",
@@ -146,15 +165,48 @@ export const SubtitleTracksMenu: React.FC<SubtitleTracksMenuProps> = ({
 
           <DropdownMenuSeparator className="bg-white/10" />
 
-          {subtitleTracks.map((track, i) => (
-            <DropdownMenuRadioItem
-              key={i}
-              value={String(track.index)}
-              className="px-5 py-2.5 transition-colors hover:bg-white/10 text-white"
-            >
-              <span className="text-white/90 ml-3">{track.label}</span>
-            </DropdownMenuRadioItem>
-          ))}
+          {subtitleTracks.map((track, i) => {
+            const sub = installedByIndex.get(track.index);
+            const language = sub?.language || "";
+            const release =
+              sub?.details?.release ||
+              (sub?.isExternal && sub.path
+                ? sub.path.split(/[\\/]/).pop()
+                : sub?.title || "");
+            const fps = sub?.details?.fps;
+            return (
+              <DropdownMenuRadioItem
+                key={i}
+                value={String(track.index)}
+                className="px-5 py-2.5 transition-colors hover:bg-white/10 text-white"
+              >
+                <div className="ml-3 flex min-w-0 items-start gap-2">
+                  {language ? (
+                    <Flag language={language} size={16} className="mt-0.5 shrink-0" />
+                  ) : null}
+                  <div className="min-w-0">
+                    <div className="text-white/90">
+                      {language ? languageName(language) : track.label}
+                      {sub?.isForced || sub?.details?.forced ? " · Forced" : ""}
+                      {sub?.isHearingImpaired || sub?.details?.hearingImpaired
+                        ? " · HI"
+                        : ""}
+                    </div>
+                    {release || fps ? (
+                      <div
+                        className="truncate text-[11px] text-white/50"
+                        title={release || undefined}
+                      >
+                        {[release, fps ? `${fps.toFixed(3)} fps` : ""]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </DropdownMenuRadioItem>
+            );
+          })}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -17,10 +17,19 @@ import type {
   OpenSubtitlesConfig,
   SeerrAuthData,
 } from "@/src/actions/store/server-actions";
+import type {
+  PendingSubtitle,
+  SubtitleDetails,
+} from "@/src/actions/subtitles-search";
 
 export interface ApertureSettings {
   seerr?: SeerrAuthData | null;
   opensubtitles?: OpenSubtitlesConfig | null;
+  // What was added through Aperture, keyed by the sidecar's path on the
+  // Jellyfin server. Jellyfin only names the file after the video + language,
+  // so this is the only record of which release a subtitle came from.
+  subtitles?: Record<string, SubtitleDetails> | null;
+  pendingSubtitles?: PendingSubtitle[] | null;
 }
 
 const EMPTY: ApertureSettings = {};
@@ -103,8 +112,7 @@ export async function readSettings(): Promise<ApertureSettings> {
 export async function patchSettings(
   patch: ApertureSettings,
 ): Promise<ApertureSettings> {
-  const run = writeQueue.then(async () => {
-    const current = await readFromDisk();
+  return updateSettings((current) => {
     const next: ApertureSettings = { ...current };
 
     for (const [key, value] of Object.entries(patch)) {
@@ -115,6 +123,20 @@ export async function patchSettings(
       }
     }
 
+    return next;
+  });
+}
+
+/**
+ * Replace the stored settings with `update(current)`. Use this instead of
+ * read-then-patch whenever the new value depends on the old one, so a
+ * concurrent write can't be lost in between.
+ */
+export async function updateSettings(
+  update: (current: ApertureSettings) => ApertureSettings,
+): Promise<ApertureSettings> {
+  const run = writeQueue.then(async () => {
+    const next = update(await readFromDisk());
     await writeToDisk(next);
     return next;
   });

@@ -39,7 +39,9 @@ import {
   deleteJellyfinSubtitle,
   type InstalledSubtitle,
 } from "../../actions";
+import { StoreOpenSubtitlesData } from "../../actions/store/store-opensubtitles-data";
 import { formatRuntime } from "../../lib/utils";
+import { languageName } from "../../lib/language";
 
 interface SearchResult {
   fileId: number | null;
@@ -134,18 +136,32 @@ function SubtitleManagerContent({
 
   const [installed, setInstalled] = useState<InstalledSubtitle[]>([]);
   const [loadingInstalled, setLoadingInstalled] = useState(true);
+  // From Settings → OpenSubtitles; null until loaded.
+  const [preferredLanguages, setPreferredLanguages] = useState<string | null>(
+    null,
+  );
 
-  const refreshInstalled = useCallback(async () => {
+  useEffect(() => {
+    StoreOpenSubtitlesData.status()
+      .then((status) => setPreferredLanguages(status.languages || "en"))
+      .catch(() => setPreferredLanguages("en"));
+  }, []);
+
+  const refreshInstalled = useCallback(async (): Promise<
+    InstalledSubtitle[]
+  > => {
     if (!mediaSource?.Id) {
       setInstalled([]);
       setLoadingInstalled(false);
-      return;
+      return [];
     }
     try {
       const subs = await getInstalledSubtitles(itemId, mediaSource.Id);
       setInstalled(subs);
+      return subs;
     } catch (e) {
       console.error("Failed to load installed subtitles", e);
+      return [];
     } finally {
       setLoadingInstalled(false);
     }
@@ -193,15 +209,23 @@ function SubtitleManagerContent({
         </TabsList>
 
         <TabsContent value="search" className="mt-4">
-          <SearchTab
-            itemId={itemId}
-            imdbId={imdbId}
-            tmdbId={tmdbId}
-            query={media.Name || ""}
-            year={media.ProductionYear?.toString()}
-            fileFps={fileFps}
-            onInstalled={refreshInstalled}
-          />
+          {preferredLanguages === null ? (
+            <div className="flex h-[min(45vh,360px)] items-center justify-center text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
+            </div>
+          ) : (
+            <SearchTab
+              itemId={itemId}
+              imdbId={imdbId}
+              tmdbId={tmdbId}
+              query={media.Name || ""}
+              year={media.ProductionYear?.toString()}
+              fileFps={fileFps}
+              defaultLanguages={preferredLanguages}
+              installed={installed}
+              refreshInstalled={refreshInstalled}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="installed" className="mt-4">
@@ -209,12 +233,19 @@ function SubtitleManagerContent({
             itemId={itemId}
             installed={installed}
             loading={loadingInstalled}
+            fileFps={fileFps}
             onChanged={refreshInstalled}
           />
         </TabsContent>
 
         <TabsContent value="upload" className="mt-4">
-          <UploadTab itemId={itemId} onUploaded={refreshInstalled} />
+          <UploadTab
+            itemId={itemId}
+            defaultLanguage={
+              preferredLanguages?.split(",")[0]?.trim() || "en"
+            }
+            onUploaded={refreshInstalled}
+          />
         </TabsContent>
       </Tabs>
     </div>
@@ -228,7 +259,9 @@ function SearchTab({
   query,
   year,
   fileFps,
-  onInstalled,
+  defaultLanguages,
+  installed,
+  refreshInstalled,
 }: {
   itemId: string;
   imdbId?: string;
@@ -236,13 +269,26 @@ function SearchTab({
   query: string;
   year?: string;
   fileFps: number | null;
-  onInstalled: () => void;
+  defaultLanguages: string;
+  installed: InstalledSubtitle[];
+  refreshInstalled: () => Promise<InstalledSubtitle[]>;
 }) {
-  const [languages, setLanguages] = useState("en");
+  const [languages, setLanguages] = useState(defaultLanguages);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [installingId, setInstallingId] = useState<number | null>(null);
+  const [installing, setInstalling] = useState<{
+    fileId: number;
+    stage: string;
+  } | null>(null);
+  // Added in this session but possibly not indexed by Jellyfin yet.
+  const [addedThisSession, setAddedThisSession] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const addedFileIds = new Set<number>(addedThisSession);
+  for (const sub of installed) {
+    if (sub.details?.fileId) addedFileIds.add(sub.details.fileId);
+  }
   const hasSearched = useRef(false);
 
   const runSearch = useCallback(async () => {
@@ -284,37 +330,72 @@ function SearchTab({
       toast.error("This result has no downloadable file");
       return;
     }
-    setInstallingId(result.fileId);
-    const toastId = toast.loading("Downloading subtitle…");
+    const fileId = result.fileId;
+    const toastId = toast.loading("Downloading from OpenSubtitles… (1/3)");
+    const setStage = (message: string, stage: string, step: number) => {
+      setInstalling({ fileId, stage });
+      toast.loading(`${message} (${step}/3)`, { id: toastId });
+    };
+    setStage("Downloading from OpenSubtitles…", "Downloading…", 1);
     try {
       const dlRes = await fetch("/api/subtitles/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileId: result.fileId }),
+        body: JSON.stringify({ fileId, itemId }),
       });
       const dl = await dlRes.json();
+      if (dlRes.status === 409) {
+        setAddedThisSession((prev) => new Set(prev).add(fileId));
+      }
       if (!dlRes.ok) throw new Error(dl?.message || "Download failed");
 
+      setStage("Adding to Jellyfin…", "Adding…", 2);
       const upload = await uploadSubtitleToJellyfin(itemId, {
         language: result.language || "und",
         format: dl.format,
         contentBase64: dl.contentBase64,
         isHearingImpaired: result.hearingImpaired,
+        details: {
+          source: "opensubtitles",
+          fileId,
+          release: result.release || result.fileName,
+          fps: result.fps,
+          fromTrusted: result.fromTrusted,
+          autoTranslated: result.aiTranslated || result.machineTranslated,
+          downloadCount: result.downloadCount,
+        },
       });
       if (!upload.success) throw new Error(upload.message || "Upload failed");
+      setAddedThisSession((prev) => new Set(prev).add(fileId));
+
+      // Jellyfin indexes the new sidecar in a queued refresh; wait for it so
+      // the Installed tab and the player show it straight away.
+      setStage("Waiting for Jellyfin to pick it up…", "Indexing…", 3);
+      let indexed = false;
+      for (let i = 0; i < 20 && !indexed; i++) {
+        const subs = await refreshInstalled();
+        indexed = subs.some((s) => s.details?.fileId === fileId);
+        if (!indexed) await new Promise((r) => setTimeout(r, 1500));
+      }
 
       const remainingMsg =
         typeof dl.remaining === "number"
           ? ` (${dl.remaining} downloads left today)`
           : "";
-      toast.success(`Subtitle added${remainingMsg}`, { id: toastId });
-      onInstalled();
+      if (indexed) {
+        toast.success(`Subtitle added${remainingMsg}`, { id: toastId });
+      } else {
+        toast.success(
+          `Subtitle added${remainingMsg}. Jellyfin is still indexing it; it will show up shortly.`,
+          { id: toastId },
+        );
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to add subtitle", {
         id: toastId,
       });
     } finally {
-      setInstallingId(null);
+      setInstalling(null);
     }
   };
 
@@ -376,10 +457,13 @@ function SearchTab({
                 r.fps && fileFps
                   ? Math.abs(r.fps - fileFps) < 0.05
                   : false;
+              const isAdded = !!r.fileId && addedFileIds.has(r.fileId);
+              const isInstalling =
+                !!r.fileId && installing?.fileId === r.fileId;
               return (
                 <div
                   key={`${r.fileId}-${i}`}
-                  className="flex items-start gap-3 p-3"
+                  className={`flex items-start gap-3 p-3 ${isAdded ? "bg-green-600/5" : ""}`}
                 >
                   <Flag language={r.language} size={18} className="mt-0.5" />
                   <div className="min-w-0 flex-1">
@@ -418,20 +502,27 @@ function SearchTab({
                       ) : null}
                     </div>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 shrink-0 gap-1.5"
-                    disabled={installingId !== null || !r.fileId}
-                    onClick={() => install(r)}
-                  >
-                    {installingId === r.fileId ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Download className="h-3.5 w-3.5" />
-                    )}
-                    Add
-                  </Button>
+                  {isAdded && !isInstalling ? (
+                    <span className="flex h-8 shrink-0 items-center gap-1.5 px-2 text-xs text-green-500">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Added
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 shrink-0 gap-1.5"
+                      disabled={installing !== null || !r.fileId}
+                      onClick={() => install(r)}
+                    >
+                      {isInstalling ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Download className="h-3.5 w-3.5" />
+                      )}
+                      {isInstalling ? installing?.stage : "Add"}
+                    </Button>
+                  )}
                 </div>
               );
             })}
@@ -446,11 +537,13 @@ function InstalledTab({
   itemId,
   installed,
   loading,
+  fileFps,
   onChanged,
 }: {
   itemId: string;
   installed: InstalledSubtitle[];
   loading: boolean;
+  fileFps: number | null;
   onChanged: () => void;
 }) {
   const [deletingIndex, setDeletingIndex] = useState<number | null>(null);
@@ -491,23 +584,72 @@ function InstalledTab({
   return (
     <ScrollArea className="h-[min(45vh,360px)] rounded-md border border-border/40">
       <div className="divide-y divide-border/40">
-        {installed.map((sub) => (
+        {installed.map((sub) => {
+          const d = sub.details;
+          const title =
+            d?.release ||
+            (sub.isExternal && sub.path ? baseName(sub.path) : sub.displayTitle);
+          const fpsMatch =
+            d?.fps && fileFps ? Math.abs(d.fps - fileFps) < 0.05 : false;
+          return (
           <div key={sub.index} className="flex items-center gap-3 p-3">
             <Flag language={sub.language} size={18} />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{sub.displayTitle}</p>
+              <p className="truncate text-sm font-medium" title={sub.path || title}>
+                {title}
+              </p>
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                <Badge variant="outline">
-                  {sub.isExternal ? "external" : "embedded"}
+                <Badge variant="outline" className="uppercase">
+                  {sub.language || "??"}
                 </Badge>
+                {sub.language ? (
+                  <span className="text-muted-foreground">
+                    {languageName(sub.language)}
+                  </span>
+                ) : null}
+                <Badge variant="outline">
+                  {d?.source === "opensubtitles"
+                    ? "OpenSubtitles"
+                    : d?.source === "upload"
+                      ? "uploaded"
+                      : sub.isExternal
+                        ? "external"
+                        : "embedded"}
+                </Badge>
+                {d?.fps ? (
+                  <Badge
+                    variant={fpsMatch ? "default" : "secondary"}
+                    className={fpsMatch ? "bg-green-600 hover:bg-green-600" : ""}
+                  >
+                    {d.fps.toFixed(3)} fps{fpsMatch ? " ✓" : ""}
+                  </Badge>
+                ) : null}
+                {d?.downloadCount ? (
+                  <Badge variant="secondary">
+                    <Download className="mr-1 h-3 w-3" />
+                    {d.downloadCount.toLocaleString()}
+                  </Badge>
+                ) : null}
+                {d?.fromTrusted ? (
+                  <Badge variant="secondary" className="text-green-500">
+                    trusted
+                  </Badge>
+                ) : null}
+                {d?.autoTranslated ? (
+                  <Badge variant="secondary" className="text-amber-500">
+                    auto-translated
+                  </Badge>
+                ) : null}
                 {sub.codec ? (
                   <Badge variant="secondary" className="uppercase">
                     {sub.codec}
                   </Badge>
                 ) : null}
                 {sub.isDefault ? <Badge variant="secondary">default</Badge> : null}
-                {sub.isForced ? <Badge variant="secondary">forced</Badge> : null}
-                {sub.isHearingImpaired ? (
+                {sub.isForced || d?.forced ? (
+                  <Badge variant="secondary">forced</Badge>
+                ) : null}
+                {sub.isHearingImpaired || d?.hearingImpaired ? (
                   <Badge variant="secondary">HI</Badge>
                 ) : null}
               </div>
@@ -532,7 +674,8 @@ function InstalledTab({
               </span>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </ScrollArea>
   );
@@ -540,12 +683,14 @@ function InstalledTab({
 
 function UploadTab({
   itemId,
+  defaultLanguage,
   onUploaded,
 }: {
   itemId: string;
+  defaultLanguage: string;
   onUploaded: () => void;
 }) {
-  const [language, setLanguage] = useState("en");
+  const [language, setLanguage] = useState(defaultLanguage);
   const [forced, setForced] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -583,6 +728,15 @@ function UploadTab({
         format,
         contentBase64: base64,
         isForced: forced,
+        details: {
+          source: "upload",
+          fileId: null,
+          release: file.name,
+          fps: null,
+          fromTrusted: false,
+          autoTranslated: false,
+          downloadCount: null,
+        },
       });
       if (!res.success) throw new Error(res.message || "Upload failed");
       toast.success("Subtitle uploaded", { id: toastId });

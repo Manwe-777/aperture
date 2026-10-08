@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOpenSubtitlesConfig } from "@/src/actions/store/server-actions";
+import { isSubtitleFileAdded } from "@/src/actions/subtitles-search";
 import {
   downloadSubtitle,
   OpenSubtitlesError,
@@ -17,7 +18,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { fileId?: number };
+  let body: { fileId?: number; itemId?: string };
   try {
     body = await req.json();
   } catch {
@@ -30,6 +31,20 @@ export async function POST(req: NextRequest) {
       { message: "A valid fileId is required" },
       { status: 400 },
     );
+  }
+
+  // Re-downloading spends quota for a file the item already has.
+  if (body.itemId) {
+    try {
+      if (await isSubtitleFileAdded(body.itemId, fileId)) {
+        return NextResponse.json(
+          { message: "This subtitle is already added to this title" },
+          { status: 409 },
+        );
+      }
+    } catch (error) {
+      console.error("Could not check for an existing subtitle:", error);
+    }
   }
 
   try {
